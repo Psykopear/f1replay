@@ -99,7 +99,7 @@ class RerunSink(DynamicSink):
         return RerunPartition(self.track)
 
 
-def replay_session(year=2024, wknd=1, ses="R"):
+def replay_session(year=2024, week=1, session="R"):
     # Init rerun
     rr.init("F1RaceSim", spawn=True)
     rr.connect()
@@ -133,7 +133,7 @@ def replay_session(year=2024, wknd=1, ses="R"):
     rr.send_blueprint(blueprint)
 
     # Init data
-    session = ff1.get_session(year, wknd, ses)
+    session = ff1.get_session(year, week, session)
     session.load()
     lap = session.laps.pick_fastest()
     x = lap.telemetry["X"]

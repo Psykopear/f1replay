@@ -13,9 +13,8 @@ from bytewax.outputs import StatelessSinkPartition, DynamicSink
 
 # Input
 class DriverSource(StatefulSourcePartition):
-    def __init__(self, driver, telemetry, track):
+    def __init__(self, driver, telemetry):
         self.driver = driver
-        self.points = track
         self._next_awake = datetime.now(tz=timezone.utc)
         self._last_time = telemetry.iloc[0]["Date"]
         self._data = telemetry.iloc
@@ -41,7 +40,12 @@ class RaceInput(FixedPartitionedSource):
         lap = session.laps.pick_fastest()
         x = lap.telemetry["X"]
         y = lap.telemetry["Y"]
-        self.track = np.array([x, y]).T.reshape(-1, 2)
+        track = np.array([x, y]).T.reshape(-1, 2)
+        rr.log(
+            "/track/outline",
+            rr.LineStrips2D(track, radii=20, draw_order=-1.0),
+            static=True,
+        )
         self.frequency = frequency
 
     def list_parts(self):
@@ -55,14 +59,12 @@ class RaceInput(FixedPartitionedSource):
             self.session.laps.pick_driver(for_part).get_telemetry(
                 frequency=self.frequency
             ),
-            self.track,
         )
 
 
 # Output
 class RerunPartition(StatelessSinkPartition):
     def __init__(self, track):
-        self.track = track
         self.start_time = None
 
     def write_batch(self, items):
@@ -74,21 +76,18 @@ class RerunPartition(StatelessSinkPartition):
             name = driver["Abbreviation"]
             team_color = driver["TeamColor"]
 
-            since_start = int((dt - self.start_time).total_seconds() * 1000)
-            rr.set_time_sequence(f"{name}", since_start)
-            rr.log("/track", rr.LineStrips2D(self.track, radii=20, draw_order=-1.0))
+            since_start = (dt - self.start_time).total_seconds()
+            rr.set_time_seconds(f"{name}", since_start)
 
             # Convert hex string to rgb 0-255
             color = tuple(int(team_color[i : i + 2], 16) for i in (0, 2, 4))
 
             point = [datum["X"], datum["Y"]]
             rr.log(f"/track/{name}", rr.Points2D(point, colors=[color], radii=60))
-
             rr.log(f"/telemetry/speed/{name}", rr.Scalar(datum["Speed"]))
             rr.log(f"/telemetry/rpm/{name}", rr.Scalar(datum["RPM"]))
             rr.log(f"/telemetry/gear/{name}", rr.Scalar(datum["nGear"]))
-            rr.log(f"/telemetry/throttle-brake/{name}", rr.Scalar(datum["Throttle"]))
-            # rr.log(f"/telemetry/throttle-brake/{name}", rr.Scalar(datum["Brake"] * 100))
+            rr.log(f"/telemetry/throttle/{name}", rr.Scalar(datum["Throttle"]))
 
 
 class RerunSink(DynamicSink):
@@ -100,19 +99,51 @@ class RerunSink(DynamicSink):
 
 
 def replay_session(year=2024, week=1, session="R"):
+    # Init data
+    session = ff1.get_session(year, week, session)
+    session.load()
+    lap = session.laps.pick_fastest()
+    x = lap.telemetry["X"]
+    y = lap.telemetry["Y"]
+    track = np.array([x, y]).T.reshape(-1, 2)
+
     # Init rerun
     rr.init("F1RaceSim", spawn=True)
     rr.connect()
 
     corner = rrb.Corner2D.LeftBottom
+    time_ranges = [
+        rrb.VisibleTimeRange(
+            f"{session.get_driver(driver)['Abbreviation']}",
+            start=rrb.TimeRangeBoundary.cursor_relative(seconds=-30),
+            end=rrb.TimeRangeBoundary.cursor_relative(0),
+        )
+        for driver in session.drivers
+    ]
     speed = rrb.TimeSeriesView(
-        name="Speed", origin="/telemetry/speed", plot_legend=corner
+        name="Speed",
+        origin="/telemetry/speed",
+        plot_legend=corner,
+        time_ranges=time_ranges,
     )
-    rpm = rrb.TimeSeriesView(name="RPM", origin="/telemetry/rpm", plot_legend=corner)
+    rpm = rrb.TimeSeriesView(
+        name="RPM",
+        origin="/telemetry/rpm",
+        plot_legend=corner,
+        time_ranges=time_ranges,
+    )
     throttle = rrb.TimeSeriesView(
-        name="Throttle", origin="/telemetry/throttle-brake", plot_legend=corner
+        name="Throttle",
+        origin="/telemetry/throttle",
+        plot_legend=corner,
+        time_ranges=time_ranges,
     )
-    gear = rrb.TimeSeriesView(name="Gear", origin="/telemetry/gear", plot_legend=corner)
+    gear = rrb.TimeSeriesView(
+        name="Gear",
+        origin="/telemetry/gear",
+        plot_legend=corner,
+        time_ranges=time_ranges,
+    )
 
     telemetry = rrb.Vertical(
         contents=[
@@ -131,14 +162,6 @@ def replay_session(year=2024, week=1, session="R"):
     )
 
     rr.send_blueprint(blueprint)
-
-    # Init data
-    session = ff1.get_session(year, week, session)
-    session.load()
-    lap = session.laps.pick_fastest()
-    x = lap.telemetry["X"]
-    y = lap.telemetry["Y"]
-    track = np.array([x, y]).T.reshape(-1, 2)
 
     # Dataflow
     flow = Dataflow("f1-race-simulation")

@@ -20,3 +20,6 @@ python -m bytewax.run 'main:replay_session(year=2024, week=3, session="R")'
 ```
 
 See fastf1 docs for session options, rerun docs to show different metrics, bytewax docs to change the dataflow.
+
+
+![screenshot](./screen.png)
